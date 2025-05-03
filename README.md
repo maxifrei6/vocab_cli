@@ -1,4 +1,4 @@
-# VocabCLI: Spanish Vocabulary Coach
+# VocabCLI: Spanish Vocabulary Coach [Work in Progress]
 
 A terminal-based Spanish vocabulary coach and flashcard system that uses a local LLaMA model (via Ollama) to generate translations, definitions, and example sentences.
 
