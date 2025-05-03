@@ -1,0 +1,13 @@
+ollama_model: "llama3.2:latest"
+database_path: data/vocab.sqlite3
+
+srs_intervals:
+  1: 1    # box 1 → 1 day
+  2: 3
+  3: 7
+  4: 14
+  5: 30
+
+logging:
+  level: INFO
+  file: logs/app.log
