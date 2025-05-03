@@ -20,86 +20,78 @@ def start_session(known_words: list):
     click.echo("\nStarting Spanish conversation practice...")
     click.echo("Type 'exit' to end the session.\n")
     
-    # Initial prompt to the model
-    prompt = f"""
-    You are a Spanish language tutor. Have a conversation with me in Spanish.
-    Use only these known words: {', '.join(known_words)}
-    Introduce up to 3 new words naturally in the conversation.
-    Keep responses short and clear.
-    Start with a greeting and a simple question.
-    """
-    
+    # Create a prompt that includes the known words
+    words_str = ", ".join(known_words)
+    prompt = f"""You are a Spanish language tutor. The student knows these words: {words_str}
+
+Please have a natural conversation in Spanish, using simple sentences and the words the student knows.
+Keep your responses short and clear. If the student makes a mistake, gently correct them.
+If the student says they don't understand, explain in simpler terms.
+
+Start the conversation with a simple greeting."""
+
     try:
+        # Get initial greeting
+        response = llm.call_ollama(prompt)
+        tutor_response = response.get('raw_response', '').strip()
+        if tutor_response:
+            # Remove any markdown formatting
+            tutor_response = re.sub(r'\*\*|\*|`', '', tutor_response)
+            # Remove any English translations in parentheses
+            tutor_response = re.sub(r'\(.*?\)', '', tutor_response)
+            # Remove any notes or explanations
+            tutor_response = re.sub(r'Note:.*|\(Note:.*?\)', '', tutor_response)
+            # Take only the first line if there are multiple lines
+            tutor_response = tutor_response.split('\n')[0].strip()
+        
+        click.echo(f"Tutor: {tutor_response}")
+        
+        conversation_history = []
+        conversation_history.append(f"Tutor: {tutor_response}")
+        
         while True:
-            # Get model's response
-            response = llm.call_ollama(prompt)
-            model_text = response.get('response', '')
-            click.echo(f"\nTutor: {model_text}")
-            
-            # Extract new words using regex
-            new_words = re.findall(r'\b[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]+\b', model_text)
-            new_words = [w.lower() for w in new_words if w.lower() not in known_words]
-            
-            # If we found new words, add them to the database
-            if new_words:
-                click.echo("\nNew words detected:")
-                for word in new_words:
-                    click.echo(f"- {word}")
-                    # Add each new word to the database
-                    try:
-                        data = llm.call_ollama(
-                            f"Provide a JSON with keys 'translation_en', 'translation_de', 'definition', 'example_sentence' "
-                            f"for the Spanish word '{word}'. Context: found in conversation practice."
-                        )
-                        
-                        conn = db.get_connection()
-                        cursor = conn.cursor()
-                        today = datetime.now().date()
-                        
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO vocab 
-                            (word, translation_en, translation_de, definition, example_sentence, context, 
-                             first_seen, last_seen, known, box, next_review)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            word,
-                            data['translation_en'],
-                            data['translation_de'],
-                            data['definition'],
-                            data['example_sentence'],
-                            "Conversation practice",
-                            today,
-                            today,
-                            0,  # known
-                            1,  # box
-                            today  # next_review
-                        ))
-                        
-                        conn.commit()
-                        conn.close()
-                        click.echo(f"Added word: {word}")
-                        
-                    except Exception as e:
-                        click.echo(f"Error adding word {word}: {e}", err=True)
-            
-            # Get user's response
             user_input = click.prompt("\nYou", type=str)
             if user_input.lower() == 'exit':
                 break
+                
+            conversation_history.append(f"Student: {user_input}")
             
-            # Update prompt with conversation history
-            prompt = f"""
-            Previous conversation:
-            Tutor: {model_text}
-            Student: {user_input}
+            # Create a prompt for the response
+            response_prompt = f"""You are a Spanish language tutor having a conversation with a student.
+The student knows these words: {words_str}
+
+Previous conversation:
+{chr(10).join(conversation_history[-4:])}
+
+IMPORTANT:
+1. Continue the conversation naturally based on the student's last message
+2. Do not start a new conversation or say hello again
+3. Keep your response short and clear
+4. Use only the words the student knows
+5. Do not include any English translations or notes
+6. Do not include any explanations or corrections unless the student asks for them
+
+Please respond to the student's last message in Spanish."""
+
+            response = llm.call_ollama(response_prompt)
+            tutor_response = response.get('raw_response', '').strip()
+            if tutor_response:
+                # Remove any markdown formatting
+                tutor_response = re.sub(r'\*\*|\*|`', '', tutor_response)
+                # Remove any English translations in parentheses
+                tutor_response = re.sub(r'\(.*?\)', '', tutor_response)
+                # Remove any notes or explanations
+                tutor_response = re.sub(r'Note:.*|\(Note:.*?\)', '', tutor_response)
+                # Take only the first line if there are multiple lines
+                tutor_response = tutor_response.split('\n')[0].strip()
             
-            Continue the conversation in Spanish.
-            Use only these known words: {', '.join(known_words)}
-            Introduce up to 3 new words naturally in the conversation.
-            Keep responses short and clear.
-            """
-    
+            if tutor_response:
+                click.echo(f"\nTutor: {tutor_response}")
+                conversation_history.append(f"Tutor: {tutor_response}")
+            else:
+                click.echo("\nTutor: Lo siento, no entiendo. ¿Podrías repetir?")
+            
     except Exception as e:
-        click.echo(f"Error in chat session: {e}", err=True)
+        click.echo(f"Error: {e}", err=True)
     
-    click.echo("\nConversation practice ended.")
+    click.echo("\nConversation ended. ¡Hasta luego!")

@@ -16,27 +16,24 @@ SRS_INTERVALS = cfg.get("srs_intervals", {
     5: 30    # box 5 → 30 days
 })
 
-def update_box(cursor, word: str, correct: bool) -> int:
+def update_box(current_box: int, score: int) -> int:
     """
-    Update a card's box based on whether the answer was correct.
+    Update a card's box based on the user's score (1-5).
     Returns the new box number.
     """
-    # Get current box
-    cursor.execute("SELECT box FROM vocab WHERE word = ?", (word,))
-    current_box = cursor.fetchone()[0]
-    
-    if correct:
+    if score >= 4:
         # Move up one box, but don't exceed box 5
-        new_box = min(current_box + 1, 5)
-    else:
+        return min(current_box + 1, 5)
+    elif score <= 2:
         # Move back to box 1
-        new_box = 1
-    
-    return new_box
+        return 1
+    else:
+        # Stay in the same box
+        return current_box
 
-def calculate_next_review(today: datetime.date, box: int) -> datetime.date:
+def calculate_next_review(box: int) -> datetime:
     """
     Calculate the next review date based on the box number.
     """
     interval = SRS_INTERVALS.get(box, 1)  # Default to 1 day if box not found
-    return today + timedelta(days=interval)
+    return datetime.now() + timedelta(days=interval)

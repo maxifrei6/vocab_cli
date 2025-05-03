@@ -41,7 +41,7 @@ A terminal-based Spanish vocabulary coach and flashcard system that uses a local
 
 4. Initialize the database:
    ```bash
-   python -m src.cli init
+   python vocab_cli.py init
    ```
 
 ## Configuration
@@ -56,43 +56,44 @@ Edit `config.yaml` to customize:
 
 ### Add a New Word
 ```bash
-python -m src.cli add "palabra" "contexto"
+python vocab_cli.py add "palabra" "contexto"
 ```
 
 ### Review Flashcards
 ```bash
-python -m src.cli review
+python vocab_cli.py review
 ```
 
 ### Practice Conversation
 ```bash
-python -m src.cli chat
+python vocab_cli.py chat
 ```
 
 ### Export/Import Data
 ```bash
 # Export
-python -m src.cli export vocab_backup.json
+python vocab_cli.py export vocab_backup.json
 
 # Import
-python -m src.cli import vocab_backup.json
+python vocab_cli.py import vocab_backup.json
 ```
 
 ## Project Structure
 
 ```
 vocab_cli/
-├── config.yaml          # Configuration settings
-├── data/               # SQLite database
-├── logs/               # Application logs
-├── requirements.txt    # Python dependencies
-└── src/               # Source code
-    ├── cli.py         # Command-line interface
-    ├── db.py          # Database operations
-    ├── llm.py         # LLaMA model integration
-    ├── srs.py         # Spaced repetition system
-    ├── chat.py        # Conversation practice
-    └── utils.py       # Helper functions
+├── vocab_cli.py       # Main entry point
+├── config.yaml        # Configuration settings
+├── data/             # SQLite database
+├── logs/             # Application logs
+├── requirements.txt  # Python dependencies
+└── src/             # Source code
+    ├── cli.py       # Command-line interface
+    ├── db.py        # Database operations
+    ├── llm.py       # LLaMA model integration
+    ├── srs.py       # Spaced repetition system
+    ├── chat.py      # Conversation practice
+    └── utils.py     # Helper functions
 ```
 
 ## Contributing

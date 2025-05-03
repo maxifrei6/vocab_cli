@@ -1,182 +1,229 @@
 #!/usr/bin/env python3
 import click
-import yaml
-from pathlib import Path
-from datetime import datetime, timedelta
 import json
-from . import db, llm, srs, chat, utils
-
-# Load configuration
-CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
-with open(CONFIG_PATH) as f:
-    cfg = yaml.safe_load(f)
+from datetime import datetime
+from .db import get_connection, init
+from .llm import call_ollama
+from .srs import update_box, calculate_next_review
+from .chat import start_session
 
 @click.group()
-def cli():
+def cli(args=None):
     """VocabCLI - A terminal-based Spanish vocabulary coach."""
     pass
 
 @cli.command()
-def init():
+def init_db():
     """Initialize the database and create tables."""
-    db.init()
+    init()
+    click.echo("Database initialized successfully!")
 
 @cli.command()
 @click.argument('word')
 @click.argument('context')
 def add(word, context):
     """Add a new word to your vocabulary list."""
-    # Generate flashcard data using LLM
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Check if word already exists
+    cursor.execute("SELECT id FROM vocabulary WHERE word = ?", (word,))
+    if cursor.fetchone():
+        click.echo(f"Word '{word}' already exists in your vocabulary list!")
+        conn.close()
+        return
+    
+    # Generate flashcard content using Ollama
     try:
-        data = llm.call_ollama(
-            f"Provide a JSON with keys 'translation_en', 'translation_de', 'definition', 'example_sentence' "
-            f"for the Spanish word '{word}'. Use the following context: {context}."
-        )
+        response = call_ollama(f"Generate a flashcard for the Spanish word '{word}'. Include:\n"
+                             f"1. English translation\n"
+                             f"2. Definition in Spanish\n"
+                             f"3. Example sentence in Spanish")
         
-        # Add to database
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        today = datetime.now().date()
-        
+        # Insert into database
         cursor.execute("""
-            INSERT OR REPLACE INTO vocab 
-            (word, translation_en, translation_de, definition, example_sentence, context, 
-             first_seen, last_seen, known, box, next_review)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO vocabulary (word, context, translation, definition, 
+                                  example_spanish, box, next_review, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
         """, (
             word,
-            data['translation_en'],
-            data['translation_de'],
-            data['definition'],
-            data['example_sentence'],
             context,
-            today,
-            today,
-            0,  # known
-            1,  # box
-            today  # next_review
+            response.get('translation', ''),
+            response.get('definition', ''),
+            response.get('example_spanish', ''),
+            datetime.now(),
+            datetime.now()
         ))
-        
         conn.commit()
-        conn.close()
-        click.echo(f"Added word: {word}")
-        
+        click.echo(f"Added '{word}' to your vocabulary list!")
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(f"Error: {str(e)}")
+    finally:
+        conn.close()
 
 @cli.command()
 def review():
     """Review due flashcards."""
-    conn = db.get_connection()
+    conn = get_connection()
     cursor = conn.cursor()
-    today = datetime.now().date()
     
-    # Get due cards
+    # Get all cards, not just due ones
     cursor.execute("""
-        SELECT word, translation_en, translation_de, definition, example_sentence
-        FROM vocab
-        WHERE next_review <= ? AND known = 0
-        ORDER BY box
-    """, (today,))
+        SELECT id, word, translation, definition, example_spanish, box
+        FROM vocabulary
+        ORDER BY next_review ASC
+    """)
     
     cards = cursor.fetchall()
     if not cards:
-        click.echo("No cards due for review today!")
+        click.echo("No cards to review!")
+        conn.close()
         return
     
-    for word, en, de, definition, example in cards:
+    for card in cards:
         click.echo("\n" + "="*50)
-        click.echo(f"Word: {word}")
-        click.echo(f"English: {en}")
-        click.echo(f"German: {de}")
+        click.echo(f"Word: {card[1]}")
+        click.echo(f"Box: {card[5]}")
+        click.echo("\nPress Enter to see translation...")
+        input()
+        click.echo(f"Translation: {card[2]}")
+        click.echo(f"Definition: {card[3]}")
+        click.echo(f"Example: {card[4]}")
         
-        if click.confirm("Show definition and example?"):
-            click.echo(f"\nDefinition: {definition}")
-            click.echo(f"Example: {example}")
+        while True:
+            response = click.prompt("\nHow well did you know this? (1-5, q to quit)", type=str)
+            if response.lower() == 'q':
+                conn.close()
+                return
+            
+            try:
+                score = int(response)
+                if 1 <= score <= 5:
+                    break
+                click.echo("Please enter a number between 1 and 5")
+            except ValueError:
+                click.echo("Please enter a number between 1 and 5")
         
-        correct = click.confirm("Did you know this word?")
-        
-        # Update card based on response
-        new_box = srs.update_box(cursor, word, correct)
-        next_review = srs.calculate_next_review(today, new_box)
+        # Update box and next review date
+        new_box = update_box(card[5], score)
+        next_review = calculate_next_review(new_box)
         
         cursor.execute("""
-            UPDATE vocab
-            SET box = ?, next_review = ?, last_seen = ?
-            WHERE word = ?
-        """, (new_box, next_review, today, word))
+            UPDATE vocabulary
+            SET box = ?, next_review = ?
+            WHERE id = ?
+        """, (new_box, next_review, card[0]))
+        conn.commit()
     
-    conn.commit()
     conn.close()
-    click.echo("\nReview session complete!")
+    click.echo("\nReview session completed!")
 
 @cli.command()
 def chat():
-    """Start a Spanish conversation practice session."""
-    try:
-        # Get known words for context
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT word FROM vocab WHERE known = 1")
-        known_words = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        
-        # Start chat session
-        chat.start_session(known_words)
-        
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    """Start a conversation practice session."""
+    # Get all words from the database
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT word FROM vocabulary")
+    known_words = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    if not known_words:
+        click.echo("No words in your vocabulary list. Add some words first!")
+        return
+    
+    start_session(known_words)
 
 @cli.command()
 @click.argument('output_file', type=click.Path())
 def export(output_file):
-    """Export vocabulary data to JSON file."""
-    conn = db.get_connection()
+    """Export vocabulary to a JSON file."""
+    conn = get_connection()
     cursor = conn.cursor()
+    cursor.execute("SELECT * FROM vocabulary")
+    words = cursor.fetchall()
+    conn.close()
     
-    cursor.execute("SELECT * FROM vocab")
-    columns = [description[0] for description in cursor.description]
-    data = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    if not words:
+        click.echo("No words to export!")
+        return
+    
+    data = []
+    for word in words:
+        # Handle date fields
+        next_review = word[7]
+        created_at = word[8]
+        
+        # Convert dates to ISO format if they exist
+        if isinstance(next_review, str):
+            next_review = next_review if next_review else None
+        else:
+            next_review = next_review.isoformat() if next_review else None
+            
+        if isinstance(created_at, str):
+            created_at = created_at if created_at else None
+        else:
+            created_at = created_at.isoformat() if created_at else None
+        
+        data.append({
+            'word': word[1],
+            'context': word[2],
+            'translation': word[3],
+            'definition': word[4],
+            'example_spanish': word[5],
+            'box': word[6],
+            'next_review': next_review,
+            'created_at': created_at
+        })
     
     with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+        json.dump(data, f, ensure_ascii=False, indent=2)
     
-    conn.close()
-    click.echo(f"Exported data to {output_file}")
+    click.echo(f"Exported {len(data)} words to {output_file}")
 
 @cli.command()
 @click.argument('input_file', type=click.Path(exists=True))
 def import_(input_file):
     """Import vocabulary data from JSON file."""
-    with open(input_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    
-    conn = db.get_connection()
+    conn = get_connection()
     cursor = conn.cursor()
+    
+    with open(input_file) as f:
+        data = json.load(f)
     
     for item in data:
         cursor.execute("""
-            INSERT OR REPLACE INTO vocab 
-            (word, translation_en, translation_de, definition, example_sentence, context,
-             first_seen, last_seen, known, box, next_review)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO vocabulary
+            (word, context, translation, definition,
+             example_spanish, box, next_review, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             item['word'],
-            item['translation_en'],
-            item['translation_de'],
-            item['definition'],
-            item['example_sentence'],
             item['context'],
-            item['first_seen'],
-            item['last_seen'],
-            item['known'],
+            item['translation'],
+            item['definition'],
+            item['example_spanish'],
             item['box'],
-            item['next_review']
+            datetime.fromisoformat(item['next_review']) if item['next_review'] else None,
+            datetime.fromisoformat(item['created_at']) if item['created_at'] else None
         ))
     
     conn.commit()
     conn.close()
     click.echo(f"Imported data from {input_file}")
 
-if __name__ == '__main__':
-    cli()
+@cli.command()
+@click.argument('word')
+def delete(word):
+    """Delete a word from your vocabulary list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM vocabulary WHERE word = ?", (word,))
+    if cursor.rowcount > 0:
+        conn.commit()
+        click.echo(f"Deleted '{word}' from your vocabulary list!")
+    else:
+        click.echo(f"Word '{word}' not found in your vocabulary list!")
+    
+    conn.close()

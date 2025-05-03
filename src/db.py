@@ -11,18 +11,18 @@ with open(CONFIG_PATH) as f:
 
 DB_PATH = Path(cfg["database_path"])
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS vocab (
-    word             TEXT    PRIMARY KEY,
-    translation_en   TEXT,
-    translation_de   TEXT,
-    definition       TEXT,
-    example_sentence TEXT,
+DROP TABLE IF EXISTS vocabulary;
+
+CREATE TABLE vocabulary (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    word             TEXT    UNIQUE,
     context          TEXT,
-    first_seen       DATE,
-    last_seen        DATE,
-    known            INTEGER DEFAULT 0,
+    translation      TEXT,
+    definition       TEXT,
+    example_spanish  TEXT,
     box              INTEGER DEFAULT 1,
-    next_review      DATE
+    next_review      DATETIME,
+    created_at       DATETIME
 );
 """
 
@@ -31,12 +31,6 @@ def get_connection():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(DB_PATH)
 
-@click.group()
-def cli():
-    """Database utilities for VocabCLI."""
-    pass
-
-@cli.command()
 def init():
     """Initialize the SQLite database and create tables."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -46,6 +40,16 @@ def init():
     conn.commit()
     conn.close()
     click.echo(f"Initialized database at {DB_PATH}")
+
+@click.group()
+def cli():
+    """Database utilities for VocabCLI."""
+    pass
+
+@cli.command()
+def init_db():
+    """Initialize the SQLite database and create tables."""
+    init()
 
 if __name__ == "__main__":
     cli()
